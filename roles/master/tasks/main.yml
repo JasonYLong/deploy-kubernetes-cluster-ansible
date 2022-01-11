@@ -1,0 +1,134 @@
+---
+# tasks file for master
+- name: generate public key master-1
+  openssh_keypair:
+    path: /root/.ssh/id_rsa
+  when: inventory_hostname == groups['master'][0]
+
+- name: ansible copy file from remote to local.
+  fetch:
+    src: /root/.ssh/id_rsa.pub
+    dest: /tmp/root_public_keys
+    flat: yes
+  when: inventory_hostname == groups['master'][0]
+
+- name: copy the keys to masters 
+  copy:
+    src: /tmp/root_public_keys
+    dest: /tmp/root_public_keys
+    mode: 0755
+
+- name: add public key  to master-1 master-2 master-3
+  shell: cat /tmp/root_public_keys >> /root/.ssh/authorized_keys
+
+- name: install haproxy and keepalived
+  yum:
+    name: [ 'haproxy','keepalived' ]
+    state: present 
+
+- name: copy haproxy config 
+  template: src=haproxy.cfg.j2 dest=/etc/haproxy/haproxy.cfg mode=0644
+
+- name: copy keepalived config 
+  template: src=keepalived.conf.j2 dest=/etc/keepalived/keepalived.conf mode=0644
+
+- name: copy check_haproxy config 
+  template: src=check_haproxy.sh.j2 dest=/etc/keepalived/check_haproxy.sh mode=0644
+
+- name: start haproxy
+  service:
+    name: haproxy
+    state: restarted 
+
+- name: start keepalived
+  service:
+    name: keepalived
+    state: restarted 
+
+- name: download kubernetes image for master
+  shell: |
+    images="kube-apiserver:v{{ kubernetesVersion }} kube-controller-manager:v{{ kubernetesVersion }} kube-scheduler:v{{ kubernetesVersion }} kube-proxy:v{{ kubernetesVersion }} pause:3.5 etcd:3.5.0-0"
+    
+    for imageName in ${images[@]};
+    do
+        docker pull registry.cn-hangzhou.aliyuncs.com/google_containers/$imageName
+        docker tag registry.cn-hangzhou.aliyuncs.com/google_containers/$imageName k8s.gcr.io/$imageName
+        docker rmi registry.cn-hangzhou.aliyuncs.com/google_containers/$imageName
+    done
+      
+    docker pull coredns/coredns:1.8.4
+    docker tag coredns/coredns:1.8.4 k8s.gcr.io/coredns/coredns:v1.8.4
+    docker rmi coredns/coredns:1.8.4 
+
+- name: kubeadm init config 
+  template: src=kubeadm-init.j2 dest=/root/kubeadm-init.yaml  mode=0755
+  when: inventory_hostname == groups['master'][0]
+
+- name: run kubeadm init 
+  shell: |
+    kubeadm init --config /root/kubeadm-init.yaml
+  when: inventory_hostname == groups['master'][0]
+
+- name: config kubeconfig 
+  shell: |
+    mkdir -p $HOME/.kube
+    sudo cp /etc/kubernetes/admin.conf $HOME/.kube/config
+    sudo chown $(id -u):$(id -g) $HOME/.kube/config
+  when: inventory_hostname == groups['master'][0]
+
+- name: copy certification to master-2 master-3
+  shell: |
+    for node in {{ groups['master'][1] }} {{ groups['master'][2] }}; do
+      ssh $node "mkdir -p /etc/kubernetes/pki/etcd; mkdir -p ~/.kube/"
+      scp /etc/kubernetes/pki/ca.crt $node:/etc/kubernetes/pki/ca.crt
+      scp /etc/kubernetes/pki/ca.key $node:/etc/kubernetes/pki/ca.key
+      scp /etc/kubernetes/pki/sa.key $node:/etc/kubernetes/pki/sa.key
+      scp /etc/kubernetes/pki/sa.pub $node:/etc/kubernetes/pki/sa.pub
+      scp /etc/kubernetes/pki/front-proxy-ca.crt $node:/etc/kubernetes/pki/front-proxy-ca.crt
+      scp /etc/kubernetes/pki/front-proxy-ca.key $node:/etc/kubernetes/pki/front-proxy-ca.key
+      scp /etc/kubernetes/pki/etcd/ca.crt $node:/etc/kubernetes/pki/etcd/ca.crt
+      scp /etc/kubernetes/pki/etcd/ca.key $node:/etc/kubernetes/pki/etcd/ca.key
+      scp /etc/kubernetes/admin.conf $node:/etc/kubernetes/admin.conf
+      scp /etc/kubernetes/admin.conf $node:~/.kube/config
+    done  
+  when: inventory_hostname == groups['master'][0]
+
+- name: add master-2 and master-3 to kubernetes cluster
+  shell: |
+    echo "$(kubeadm token create --print-join-command) --control-plane --apiserver-advertise-address $(ip a|grep -A3 eth1:|grep inet|awk -F'[ /]' '{print $6}')"|sh        
+  when: inventory_hostname in groups['master'][1:]
+  
+- name: add kubeconfig master-2 and master-3
+  shell: |
+    mkdir -p $HOME/.kube
+    sudo cp /etc/kubernetes/admin.conf $HOME/.kube/config
+    sudo chown $(id -u):$(id -g) $HOME/.kube/config
+  when: inventory_hostname in groups['master'][1:]
+
+- name: kubeadm init config 
+  template: src=kube-flannel.j2 dest=/root/kube-flannel.yaml  mode=0755
+  when: inventory_hostname == groups['master'][0]
+
+- name: install network flannel
+  shell: kubectl apply -f /root/kube-flannel.yaml
+  when: inventory_hostname == groups['master'][0]
+
+- name: Get the token for joining the worker nodes
+  shell: kubeadm token create  --print-join-command
+  register: kubernetes_join_command
+  when: inventory_hostname == groups['master'][0]
+
+- debug:
+    msg: "{{ kubernetes_join_command.stdout }}"
+  when: inventory_hostname == groups['master'][0]
+
+- name: Copy join command to local file.
+  local_action: copy content="{{ kubernetes_join_command.stdout_lines[0] }}" dest="/tmp/kubernetes_join_command" mode=0777
+  when: inventory_hostname == groups['master'][0]
+
+- name: ansible copy kubernetes_join_command file from remote to local.
+  fetch:
+    src: /tmp/kubernetes_join_command
+    dest: /tmp/kubernetes_join_command
+    flat: yes
+  when: inventory_hostname == groups['master'][0]

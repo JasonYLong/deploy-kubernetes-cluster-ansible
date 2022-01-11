@@ -1,0 +1,42 @@
+global_defs {
+   router_id LVS_DEVEL
+}
+vrrp_script check_haproxy {
+    script "/etc/keepalived/check_haproxy.sh"
+    interval 3000
+}
+{% if inventory_hostname == groups['master'][0] %}
+vrrp_instance VI_1 {
+    state MASTER      # 主机 MASTER  备机 BACKUP
+    interface eth1   # 修改网卡名
+    virtual_router_id 80
+    priority 100      #注意修改三个节点的值  100 80 70
+    advert_int 1
+    authentication {
+        auth_type PASS
+        auth_pass 123456
+    }
+    virtual_ipaddress {
+        192.168.5.50/24  #规划的vip地址
+    }
+    track_script {
+    }
+}
+{% else %}
+vrrp_instance VI_1 {
+    state BACKUP      # 主机 MASTER  备机 BACKUP
+    interface eth1   # 修改网卡名
+    virtual_router_id 80
+    priority 80      #注意修改三个节点的值  100 80 70
+    advert_int 1
+    authentication {
+        auth_type PASS
+        auth_pass 123456
+    }
+    virtual_ipaddress {
+        192.168.5.50/24  #规划的vip地址
+    }
+    track_script {
+    }
+}
+{% endif %}

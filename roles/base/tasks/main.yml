@@ -1,0 +1,119 @@
+---
+# tasks file for base
+
+- name: install basic software
+  yum: 
+    name: [ 'vim','git','lrzsz','wget','net-tools','bash-completion' ]
+    state: present
+    
+- name: disable selinux
+  selinux:
+    state: disabled
+    
+- name: stop firewalld
+  service: 
+    name: firewalld
+    state: stopped 
+    enabled: no
+
+- name: change /etc/hosts
+  template: src=hosts.j2 dest=/etc/hosts
+
+- name: install ntp
+  yum: 
+    name: ntp
+    state: present
+
+- name: sync ntp
+  shell: ntpdate cn.pool.ntp.org
+
+- name: set timezone to Asia-Shanghai
+  shell: |
+    /usr/bin/timedatectl set-timezone Asia/Shanghai
+    /usr/bin/timedatectl set-local-rtc 1
+    /usr/bin/timedatectl set-ntp 1
+
+- name: L2 bridge
+  shell: |
+    cat > /etc/sysctl.d/k8s.conf << EOF
+    net.bridge.bridge-nf-call-ip6tables = 1
+    net.bridge.bridge-nf-call-iptables = 1
+    net.ipv4.ip_forward = 1
+    EOF
+
+- name: add br_netfilter        #加载 br_netfilter 模块
+  shell: |
+    /usr/sbin/modprobe br_netfilter 
+    /usr/sbin/sysctl -p /etc/sysctl.d/k8s.conf
+
+- name: Disable SWAP 
+  shell: |
+    swapoff -a
+    sed -i 's/.*swap.*/#&/' /etc/fstab
+
+- name: swappiness to 0
+  shell: |
+    echo vm.swappiness = 0 >> /etc/sysctl.d/k8s.conf
+    /usr/sbin/sysctl -p /etc/sysctl.d/k8s.conf
+
+- name: install ipvs module
+  yum: 
+    name: [ 'ipvsadm','ipset' ]
+    state: present
+
+- name: add modules            #增加相关模块启动文件
+  template: src=ipvs_modules.j2 dest=/etc/sysconfig/modules/ipvs.modules mode=0755
+
+- name: run ipvs.modules       #运行脚本,加载模块
+  shell: sh /etc/sysconfig/modules/ipvs.modules      
+
+- name: install yum-utils 
+  yum: 
+    name: yum-utils
+    state: present 
+
+- name: Add Docker repo
+  get_url:
+    url: https://download.docker.com/linux/centos/docker-ce.repo
+    dest: /etc/yum.repos.d/docer-ce.repo
+
+- name: Enable Docker Edge repo
+  ini_file:
+    dest: /etc/yum.repos.d/docer-ce.repo
+    section: 'docker-ce-edge'
+    option: enabled
+    value: '0'
+
+- name: install docker 
+  yum: 
+    name: [ 'docker-ce', 'docker-ce-cli', 'containerd.io' ]
+    state: present 
+
+- name: start docker 
+  service:
+    name: docker
+    state: started 
+    enabled: yes
+
+- name: docker registry and cgroup driver
+  template: src=daemon.json.j2 dest=/etc/docker/daemon.json mode=0755
+
+- name: restart docker 
+  service:
+    name: docker 
+    state: restarted
+
+########### begin to install kubelet kubeadm kubectl ########### 
+- name: kubernetes repos
+  template: src=kubernetes.repo.j2 dest=/etc/yum.repos.d/kubernetes.repo  mode=0755
+  
+- name: install kubelet kubeadm kubectl 1.xx.x-0 1.22.1-0
+  yum: 
+    name: [ 'kubelet-{{ kubernetesVersion }}-0','kubeadm-{{ kubernetesVersion }}-0','kubectl-{{ kubernetesVersion }}-0' ]
+    state: present 
+
+- name: start kubelet 
+  service: 
+    name: kubelet 
+    state: started 
+    enabled: yes 

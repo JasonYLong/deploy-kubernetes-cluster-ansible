@@ -1,0 +1,19 @@
+---
+- hosts: master
+  vars:
+    vip: "192.168.5.50"
+    imageRepository: "k8s.gcr.io"
+    kubernetesVersion: "1.22.1"
+    serviceSubnet: "10.96.0.0/12"
+    podSubnet: "10.244.0.0/16"
+    iface: "eth1"
+  roles:
+    - base
+    - master
+
+- hosts: worker
+  vars:
+    kubernetesVersion: "1.22.1"
+  roles:
+    - base
+    - worker
