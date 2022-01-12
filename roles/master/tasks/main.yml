@@ -39,11 +39,13 @@
   service:
     name: haproxy
     state: restarted 
+    enabled: yes
 
 - name: start keepalived
   service:
     name: keepalived
     state: restarted 
+    enabled: yes
 
 - name: download kubernetes image for master
   shell: |
